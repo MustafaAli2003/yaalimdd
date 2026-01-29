@@ -1,13 +1,12 @@
 {
-  "name": "nexus-bridge",
+  "name": "nexus-c2-server",
   "version": "1.0.0",
-  "description": "Shadow Nexus Bridge",
-  "main": "server.js",
+  "description": "NEXUS C2 Shadow Controller",
+  "main": "script.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node script.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "socket.io": "^4.7.2"
+    "ws": "^8.18.0"
   }
 }
